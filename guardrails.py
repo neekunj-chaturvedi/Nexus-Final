@@ -6,7 +6,10 @@ sanitize_free_text, redact_for_logging, output filtering.
 
 import html
 import re
+from presidio_analyzer import AnalyzerEngine
+from presidio_anonymizer import AnonymizerEngine
 
+# Masking the sensitive information like account numbers, policy numbers, and other identifiers is crucial for maintaining privacy and security in applications that handle sensitive data. The `mask_number` function is designed to keep only the last four digits of a number, replacing the rest with asterisks. This approach helps protect sensitive information while still allowing for some level of identification.
 def mask_number(value):
     """Keep only the last 4 digits: 50100020077431 -> **********7431"""
     if not value:
@@ -43,7 +46,7 @@ def minimize_account_fields(account, caller_scope):
 
 
 # ---------------------------------------------------------------
-# Input sanitisation / prompt-injection defence (§4)
+# Step - 1 : Input sanitisation / prompt-injection defence 
 # ---------------------------------------------------------------
 MAX_TEXT_LENGTH = 2000
 
@@ -140,44 +143,56 @@ ID_KEYS = {
 }
 CONTACT_KEYS = {"phone", "email", "full_name"}
 
-_EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+")
-_PHONE_RE = re.compile(r"\+\d{1,3}[-\s]?\d{6,12}\b")
-_LONG_DIGITS_RE = re.compile(r"\b\d{10,}\b")
+analyzer = AnalyzerEngine()
+anonymizer = AnonymizerEngine()
 
 
-def _redact_string(text):
-    text = _EMAIL_RE.sub("[EMAIL]", text)
-    text = _PHONE_RE.sub("[PHONE]", text)
-    text = _LONG_DIGITS_RE.sub(lambda m: mask_number(m.group()), text)
-    text = _INTERNAL_ID_RE.sub(lambda m: mask_number(m.group()), text)
-    return text
+def redact_with_presidio(text):
+    """Detect and redact PII from free text using Microsoft Presidio."""
+    results = analyzer.analyze(
+        text=text,
+        language="en"
+    )
+
+    result = anonymizer.anonymize(
+        text=text,
+        analyzer_results=results
+    )
+
+    return result.text
 
 
 def redact_for_logging(value):
     """Return a copy that is safe to write to a log line.
 
-    - Values under PII-shaped keys are masked (IDs) or removed (contact details)
-    - Free text is scanned for emails, phone numbers, long digit runs and IDs
-    - Works on dicts, lists, Pydantic models and plain strings
+    - Values under PII-specific keys are masked or removed
+    - Free text is scanned for PII using Microsoft Presidio
+    - Works with dicts, lists, Pydantic models, and strings
     """
-    if hasattr(value, "model_dump"):               # Pydantic model
+
+    if hasattr(value, "model_dump"):
         value = value.model_dump()
 
     if isinstance(value, dict):
         out = {}
+
         for k, v in value.items():
+
             if k in CONTACT_KEYS and v is not None:
                 out[k] = "[REDACTED]"
+
             elif k in ID_KEYS and isinstance(v, (str, int)):
                 out[k] = mask_number(str(v))
+
             else:
                 out[k] = redact_for_logging(v)
+
         return out
 
     if isinstance(value, (list, tuple)):
         return [redact_for_logging(v) for v in value]
 
     if isinstance(value, str):
-        return _redact_string(value)
+        return redact_with_presidio(value)
 
     return value
