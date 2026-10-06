@@ -1,0 +1,14 @@
+# Virtual environments
+.venv/
+venv/
+final/
+
+# Python
+__pycache__/
+*.pyc
+
+# Generated RAG index (rebuild with `python build_index.py`)
+rag/vectorstore/
+
+# Env files
+.env
